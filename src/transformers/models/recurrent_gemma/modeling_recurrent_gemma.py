@@ -98,15 +98,15 @@ class Recorder(nn.Module):
             return x
 
 
-class AttentionMapRecorder(nn.Module):
+class AttentionMapRecorder():
     def __init__(self, layer_idx: Optional[int] = None):
         self.layer_idx = layer_idx
-        self.attn_masks = []
+        self.attn_maps = []
         self.causal_masks = []
     
-    def forward(self, attn_mask, causal_mask):
+    def __call__(self, attn_map, causal_mask):
         # TODO: can also directly multiply them here to save space..
-        self.attn_masks.append(attn_mask.detach().cpu())
+        self.attn_maps.append(attn_map.detach().cpu())
         self.causal_masks.append(causal_mask.detach().cpu())
 
 
