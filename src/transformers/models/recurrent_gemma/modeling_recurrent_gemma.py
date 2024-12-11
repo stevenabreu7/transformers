@@ -98,6 +98,18 @@ class Recorder(nn.Module):
             return x
 
 
+class AttentionMapRecorder(nn.Module):
+    def __init__(self, layer_idx: Optional[int] = None):
+        self.layer_idx = layer_idx
+        self.attn_masks = []
+        self.causal_masks = []
+    
+    def forward(self, attn_mask, causal_mask):
+        # TODO: can also directly multiply them here to save space..
+        self.attn_masks.append(attn_mask.detach().cpu())
+        self.causal_masks.append(causal_mask.detach().cpu())
+
+
 # Modified RecurrentGemmaRMSNorm class with Recorder tracking
 class RecurrentGemmaRMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -242,6 +254,8 @@ class RecurrentGemmaSdpaAttention(nn.Module):
         self.post_rotary_recorder = Recorder()
         self.attention_output_recorder = Recorder()
         self.final_output_recorder = Recorder()
+        # attention map recorder
+        self.attn_map_recorder = AttentionMapRecorder()
 
     def forward(
         self,
@@ -294,6 +308,9 @@ class RecurrentGemmaSdpaAttention(nn.Module):
         if attention_mask is not None:
             causal_mask = causal_mask[:, :, :, : key_states.shape[-2]]
 
+        # query_states: (B, H, target_len, D)
+        # key_states: (B, H, context_window, D)
+        # value_states: (B, H, context_window, D)
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query_states.contiguous(),
             key_states.contiguous(),
@@ -302,6 +319,17 @@ class RecurrentGemmaSdpaAttention(nn.Module):
             dropout_p=self.attention_dropout if self.training else 0.0,
             scale=self.head_dim**-0.5,
         )
+        W = value_states.shape[-2]  # context_window
+        id = torch.eye(W, device=value_states.device).unsqueeze(0).unsqueeze(0).expand(*value_states.shape[:-2], W, W)
+        attn_map = torch.nn.functional.scaled_dot_product_attention(
+            query_states.contiguous(),
+            key_states.contiguous(),
+            id.contiguous(),
+            attn_mask=causal_mask,  # pretty much a must for sliding window backend!
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            scale=self.head_dim**-0.5,
+        )
+        self.attn_map_recorder(attn_map, causal_mask)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
